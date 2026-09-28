@@ -57,7 +57,7 @@ class OpenAIRunner:
             if blocked:
                 return blocked
 
-        block_msg = await self._run_input_plugins(user_message)
+        block_msg, user_message = await self._run_input_plugins(user_message)
         if block_msg is not None:
             return block_msg
 
@@ -78,13 +78,13 @@ class OpenAIRunner:
         text = await self._run_output_plugins(text)
         return text
 
-    async def _run_input_plugins(self, user_message: str) -> str | None:
+    async def _run_input_plugins(self, user_message: str) -> tuple[str | None, str]:
         if not self.plugins:
-            return None
+            return None, user_message
         try:
             from google.genai import types
         except ImportError:
-            return None
+            return None, user_message
 
         user_content = types.Content(
             role="user",
@@ -103,8 +103,8 @@ class OpenAIRunner:
                 result = cb(invocation_context=ctx, user_message=user_content)
             if result is None:
                 continue
-            return _content_to_text(result)
-        return None
+            return _content_to_text(result), user_message
+        return None, _content_to_text(user_content)
 
     async def _run_output_plugins(self, text: str) -> str:
         if not self.plugins or not text:

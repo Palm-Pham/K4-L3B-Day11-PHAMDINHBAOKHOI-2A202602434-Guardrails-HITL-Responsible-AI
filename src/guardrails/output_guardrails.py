@@ -15,6 +15,22 @@ from google.adk.plugins import base_plugin
 from core.utils import chat_with_agent
 
 
+_PHONE = re.compile(r"(?<![\w+])(?:\+84|0)[ .-]?[35789](?:[ .-]?\d){8}(?!\w)")
+_LANDLINE = re.compile(r"(?<![\w+])0(?:2\d{1,2})[ .-]?\d{7,8}(?!\w)")
+_EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w-])")
+_NATIONAL_ID = re.compile(r"(?<!\d)\d{9}(?:\d{3})?(?!\d)")
+_API_KEY = re.compile(r"(?<![\w-])sk-[A-Za-z0-9_-]{8,}(?![\w-])", re.IGNORECASE)
+_LABELED_API_KEY = re.compile(
+    r"(\b(?:api[ _-]?key|access[ _-]?token)\s*(?:[:=]|\bis\b)\s*)([A-Za-z0-9_/-]{8,})",
+    re.IGNORECASE,
+)
+_PASSWORD = re.compile(
+    r"((?:\bpassword\b|mật\s*khẩu)\s*(?:[:=]|\bis\b|\blà\b)\s*)([^\s,;]+)",
+    re.IGNORECASE,
+)
+_ID_LABEL = re.compile(r"(?:\bcccd\b|\bcmnd\b|\bcitizen\s+id\b|\bnational\s+id\b)", re.IGNORECASE)
+
+
 # ============================================================
 # Implement content_filter()
 #
@@ -39,21 +55,39 @@ def content_filter(response: str) -> dict:
     issues = []
     redacted = response
 
-    # PII patterns to check
-    PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
-    }
+    def replace(name: str, pattern: re.Pattern, replacement) -> None:
+        nonlocal redacted
+        redacted, count = pattern.subn(replacement, redacted)
+        if count:
+            issues.append(f"{name}: {count} found")
 
-    for name, pattern in PII_PATTERNS.items():
-        matches = re.findall(pattern, response, re.IGNORECASE)
-        if matches:
-            issues.append(f"{name}: {len(matches)} found")
-            redacted = re.sub(pattern, "[REDACTED]", redacted, flags=re.IGNORECASE)
+    replace("phone", _PHONE, "[REDACTED]")
+    replace("phone", _LANDLINE, "[REDACTED]")
+    replace("email", _EMAIL, "[REDACTED]")
+
+    # Bare 9-digit values are often transaction references. For a 9-digit ID,
+    # require an ID label; a bare 12-digit CCCD must have a valid province prefix.
+    def redact_id(match: re.Match) -> str:
+        number = match.group()
+        prefix = redacted[max(0, match.start() - 24):match.start()]
+        labeled = _ID_LABEL.search(prefix) is not None
+        plausible_cccd = len(number) == 12 and 1 <= int(number[:3]) <= 96
+        if not (labeled or plausible_cccd):
+            return number
+        id_hits[0] += 1
+        return "[REDACTED]"
+
+    id_hits = [0]
+    redacted = _NATIONAL_ID.sub(redact_id, redacted)
+    if id_hits[0]:
+        issues.append(f"national_id: {id_hits[0]} found")
+
+    replace("api_key", _API_KEY, "[REDACTED]")
+    replace("api_key", _LABELED_API_KEY, lambda match: match.group(1) + "[REDACTED]")
+    replace(
+        "password", _PASSWORD,
+        lambda match: match.group(1) + "[REDACTED]" + ("." if match.group(2).endswith(".") else ""),
+    )
 
     return {
         "safe": len(issues) == 0,
@@ -172,16 +206,29 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        filtered = content_filter(response_text)
+        if not filtered["safe"]:
+            self.redacted_count += 1
+            # Preserve non-text parts and the model response metadata. Usually
+            # there is one text part; split text parts are merged so a secret
+            # cannot evade the filter by straddling the boundary between parts.
+            text_parts = [
+                part for part in llm_response.content.parts
+                if getattr(part, "text", None)
+            ]
+            text_parts[0].text = filtered["redacted"]
+            for part in text_parts[1:]:
+                part.text = ""
 
-        return llm_response  # TODO: modify if needed
+        if self.use_llm_judge:
+            verdict = await llm_safety_check(filtered["redacted"])
+            if not verdict["safe"]:
+                self.blocked_count += 1
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text="I cannot provide that response.")],
+                )
+        return llm_response
 
 
 # ============================================================
