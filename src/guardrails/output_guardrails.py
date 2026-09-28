@@ -13,6 +13,8 @@ from google.adk import runners
 from google.adk.plugins import base_plugin
 
 from core.utils import chat_with_agent
+from agents.security_boundary import contains_secret
+from guardrails.safety_policy import dangerous_request
 
 
 _PHONE = re.compile(r"(?<![\w+])(?:\+84|0)[ .-]?[35789](?:[ .-]?\d){8}(?!\w)")
@@ -29,6 +31,26 @@ _PASSWORD = re.compile(
     re.IGNORECASE,
 )
 _ID_LABEL = re.compile(r"(?:\bcccd\b|\bcmnd\b|\bcitizen\s+id\b|\bnational\s+id\b)", re.IGNORECASE)
+_INTERNAL_HOST = re.compile(r"\b[a-z0-9.-]+\.internal(?::\d+)?\b", re.IGNORECASE)
+_CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+_ACCOUNT_NUMBER = re.compile(
+    r"((?:\baccount\s*(?:number|no\.?|#)|\bsố\s*tài\s*khoản|\bstk)\s*[:#-]?\s*)(\d[\d -]{7,20}\d)",
+    re.IGNORECASE,
+)
+
+
+def _luhn(number: str) -> bool:
+    digits = [int(char) for char in number if char.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    check = 0
+    for offset, digit in enumerate(reversed(digits)):
+        if offset % 2:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        check += digit
+    return check % 10 == 0
 
 
 # ============================================================
@@ -82,17 +104,40 @@ def content_filter(response: str) -> dict:
     if id_hits[0]:
         issues.append(f"national_id: {id_hits[0]} found")
 
+    card_hits = [0]
+
+    def redact_card(match: re.Match) -> str:
+        if not _luhn(match.group()):
+            return match.group()
+        card_hits[0] += 1
+        return "[REDACTED]"
+
+    redacted = _CARD_NUMBER.sub(redact_card, redacted)
+    if card_hits[0]:
+        issues.append(f"card_number: {card_hits[0]} found")
+    replace("account_number", _ACCOUNT_NUMBER,
+            lambda match: match.group(1) + "[REDACTED]")
+
     replace("api_key", _API_KEY, "[REDACTED]")
     replace("api_key", _LABELED_API_KEY, lambda match: match.group(1) + "[REDACTED]")
     replace(
         "password", _PASSWORD,
         lambda match: match.group(1) + "[REDACTED]" + ("." if match.group(2).endswith(".") else ""),
     )
+    replace("internal_host", _INTERNAL_HOST, "[REDACTED]")
+
+    # Redaction alone is insufficient for an encoded or split lab secret, or
+    # for instructions that facilitate account abuse. The callback replaces
+    # the entire response for these higher-risk cases.
+    block = contains_secret(response) or dangerous_request(response)
+    if block:
+        issues.append("unsafe_response: blocked")
 
     return {
         "safe": len(issues) == 0,
         "issues": issues,
         "redacted": redacted,
+        "block": block,
     }
 
 
@@ -209,6 +254,13 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         filtered = content_filter(response_text)
         if not filtered["safe"]:
             self.redacted_count += 1
+            if filtered["block"]:
+                self.blocked_count += 1
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text="I cannot provide that response. Please ask a banking question in English or Vietnamese.")],
+                )
+                return llm_response
             # Preserve non-text parts and the model response metadata. Usually
             # there is one text part; split text parts are merged so a secret
             # cannot evade the filter by straddling the boundary between parts.

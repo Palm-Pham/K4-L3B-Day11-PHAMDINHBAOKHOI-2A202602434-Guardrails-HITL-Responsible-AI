@@ -19,6 +19,7 @@ from google.adk.plugins import base_plugin
 from google.adk.agents.invocation_context import InvocationContext
 
 from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
+from guardrails.safety_policy import dangerous_request, supported_language
 
 # Quyết định rõ ràng — tránh đảo nghĩa True/False
 InputStatus = Literal["ALLOW", "BLOCK"]
@@ -180,7 +181,18 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        if detect_injection(text) == "BLOCK":
+        # A text-only customer channel must not silently accept an image/file
+        # that this plugin cannot inspect. Check every part before model access.
+        if not text.strip() or any(
+            getattr(part, "text", None) is None for part in user_message.parts or []
+        ):
+            self.blocked_count += 1
+            return self._block_response("Please send a text banking question in English or Vietnamese.")
+        if not supported_language(text):
+            self.blocked_count += 1
+            return self._block_response("Please use English or Vietnamese for banking questions.")
+
+        if detect_injection(text) == "BLOCK" or dangerous_request(text):
             self.blocked_count += 1
             return self._block_response(
                 "I cannot follow instructions that override the banking assistant's rules."
