@@ -134,3 +134,17 @@ pip install -r requirements.txt
 Rồi mở [`CHECKPOINTS.md`](CHECKPOINTS.md) và làm lần lượt Checkpoint 1 → 5.
 
 Nộp theo [`SUBMISSION.md`](SUBMISSION.md) · Quy định: [`RULES.md`](RULES.md).
+
+---
+
+## Demo web: chat trực tiếp với Blue
+
+Trang trong [`demo/`](demo/) gọi đúng `create_blue_agent()` và ba plugin đang dùng ở Checkpoint 3. Chạy trên máy local từ gốc repo:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_blue_demo.py
+```
+
+Mở **http://127.0.0.1:8765**. Cần `.env` có `OPENROUTER_API_KEY` để Blue trả lời câu hỏi hợp lệ. Lệnh này không chạy bộ kiểm tra CP3/CP4 và không ghi đè `outputs/`. Mỗi lượt chat đi qua rate limit → input guardrail → Blue model → output guardrail; audit và monitor được giữ trong bộ nhớ của phiên demo. Nếu đầu vào bị chặn thì model không được gọi. Giao diện hiển thị lớp xử lý thật của lượt gần nhất. Nếu OpenRouter trả 404 cho endpoint cố định, riêng trang demo sẽ thử endpoint `liquid/lfm-2.5-2.6b:free` của cùng model; model nào thực sự được dùng sẽ hiện trong khung chat. Cấu hình Blue phục vụ chấm lab không thay đổi.
+
+Trang chỉ phục vụ trên `127.0.0.1`. API key ở phía Python, không đưa vào trình duyệt. Đây là demo chat: không có công cụ chuyển tiền, gửi dữ liệu đến endpoint VinBank hay thao tác HITL trong giao diện. Các kiểm tra egress/HITL của lab được giới thiệu để giải thích kiến trúc, không được tính là bước đã chạy trong mỗi lượt chat.
