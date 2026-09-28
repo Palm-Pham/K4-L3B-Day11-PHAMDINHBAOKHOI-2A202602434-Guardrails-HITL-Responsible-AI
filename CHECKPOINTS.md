@@ -414,6 +414,12 @@ Get-ChildItem .\outputs\*.json
 pytest tests/public/test_results_contract.py -q
 ```
 
+Lệnh CP3 mặc định chạy **policy-only**: thực thi rate limit và input callbacks,
+kiểm tra output callback bằng `data/pii_hallucination_samples.json`, rồi ghi
+`execution_mode` và `model_executed` vào `results.json`. Không có phản hồi model
+giả cho các câu được phép. Để thử thêm đường chạy Blue LLM thật trong PowerShell,
+đặt `$env:CP3_LIVE='1'` trước khi chạy lệnh; cần khóa API và endpoint model hoạt động.
+
 **macOS / Linux (bash):**
 
 ```bash

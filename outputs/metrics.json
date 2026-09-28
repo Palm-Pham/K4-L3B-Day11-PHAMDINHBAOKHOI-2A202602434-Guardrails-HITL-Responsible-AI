@@ -1,0 +1,20 @@
+{
+  "total_requests": 27,
+  "blocked_requests": 21,
+  "block_rate": 0.7777777777777778,
+  "rate_limit_hits": 2,
+  "input_guardrail_hits": 19,
+  "output_redactions": 8,
+  "egress_blocks": 2,
+  "judge_checks": 0,
+  "judge_fails": 0,
+  "judge_fail_rate": 0.0,
+  "alerts": [
+    {
+      "metric": "block_rate",
+      "value": 0.7777777777777778,
+      "threshold": 0.5,
+      "message": "Blocked request rate exceeded threshold"
+    }
+  ]
+}

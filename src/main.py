@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -66,9 +67,15 @@ async def part3_assignment_suite():
     try:
         plugins = build_production_plugins(use_llm_judge=False)
         audit, monitor = build_observability()
-        pipeline = {"plugins": plugins, "audit": audit, "monitor": monitor}
+        pipeline = {
+            "plugins": plugins,
+            "audit": audit,
+            "monitor": monitor,
+            "live_model": os.environ.get("CP3_LIVE") == "1",
+        }
         result = await run_assignment_suite(pipeline)
         print("Suite finished.")
+        print(f"Execution mode: {result['execution_mode']}; output samples: {len(result['output_checks'])}")
         print("Wrote outputs under repo outputs/")
         return result
     except NotImplementedError as e:
@@ -134,10 +141,12 @@ async def part4_attacks():
 
 
 async def main(parts=None):
-    setup_api_key()
-
     if parts is None:
         parts = [2, 3, 4]  # Core: CP2 → CP3 → CP4
+
+    # CP2 and the default CP3 policy suite do not make provider requests.
+    if 4 in parts or (3 in parts and os.environ.get("CP3_LIVE") == "1"):
+        setup_api_key()
 
     for part in parts:
         if part == 2:
